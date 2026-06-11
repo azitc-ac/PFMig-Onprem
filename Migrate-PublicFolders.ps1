@@ -99,7 +99,7 @@ if (-not $PublicFolderPath) {
             -ireplace ' ', '' -ireplace '\\','_'
     }
 
-    Write-Verbose "Pruefe/erstelle Ziel-Mailbox..."
+    Write-Verbose "Checking/creating target mailbox..."
     $mailboxJustCreated = $false
     $mbx = Get-Mailbox -Identity $TargetMailboxName -ErrorAction SilentlyContinue
     if (-not $mbx) {
@@ -109,7 +109,7 @@ if (-not $PublicFolderPath) {
             # (siehe Get-TargetOU). Auswahl wird in dieser .config-Datei persistiert.
             $ouConfig = Join-Path $PSScriptRoot 'PFMig.OU.config'
             $ouDn = Get-TargetOU -ConfigPath $ouConfig
-            if (-not $ouDn) { Write-Host "Abgebrochen."; return }
+            if (-not $ouDn) { Write-Host "Cancelled."; return }
         }
         else {
             $ouDn = $OUforMBX
@@ -134,8 +134,7 @@ if (-not $PublicFolderPath) {
         Write-Verbose "Using existing mailbox [$TargetMailboxName]"
     }
 
-    # SMTP-Adressen robust ermitteln: WindowsEmailAddress kann bei frisch
-    # erstellten Mailboxen noch leer sein -> Fallback auf PrimarySmtpAddress.
+    # Robustly determine SMTP: WindowsEmailAddress may be empty on newly created mailboxes → fallback to PrimarySmtpAddress
     function Resolve-MailboxSmtp {
         param($Mailbox)
         $smtp = $null
@@ -150,24 +149,24 @@ if (-not $PublicFolderPath) {
 
     $targetAlias = $mbx.Alias
 
-    # Auf gueltige Ziel-SMTP warten (Adressrichtlinie braucht ggf. ein paar Sekunden)
+    # Wait for valid target SMTP (address policy can take a few seconds to apply)
     $targetSmtp = Resolve-MailboxSmtp -Mailbox $mbx
     $waited = 0
     while ([string]::IsNullOrWhiteSpace($targetSmtp) -and $waited -lt 60) {
-        Write-Verbose "Warte auf SMTP-Adresse der Ziel-Mailbox..."
+        Write-Verbose "Waiting for target mailbox SMTP address..."
         Start-Sleep 5; $waited += 5
         $mbx = Get-Mailbox -Identity $TargetMailboxName -ErrorAction SilentlyContinue
         $targetSmtp = Resolve-MailboxSmtp -Mailbox $mbx
     }
     if ([string]::IsNullOrWhiteSpace($targetSmtp)) {
-        throw ("Konnte keine SMTP-Adresse fuer Ziel-Mailbox '{0}' ermitteln." -f $TargetMailboxName)
+        throw ("Could not determine SMTP address for target mailbox '{0}'." -f $TargetMailboxName)
     }
 
     $adminMbx = Get-Mailbox -Identity $adminSam -ErrorAction SilentlyContinue
-    if (-not $adminMbx) { throw ("Admin-Mailbox '{0}' nicht gefunden (EWS-Verbindung braucht eine Mailbox)." -f $adminSam) }
+    if (-not $adminMbx) { throw ("Admin mailbox '{0}' not found (EWS connection requires a mailbox)." -f $adminSam) }
     $adminMbxSmtp = Resolve-MailboxSmtp -Mailbox $adminMbx
     if ([string]::IsNullOrWhiteSpace($adminMbxSmtp)) {
-        throw ("Konnte keine SMTP-Adresse fuer Admin-Mailbox '{0}' ermitteln." -f $adminSam)
+        throw ("Could not determine SMTP address for admin mailbox '{0}'." -f $adminSam)
     }
 
     # PF folders to process
@@ -175,62 +174,58 @@ if (-not $PublicFolderPath) {
     Write-Verbose (($folders | Format-Table | Out-String))
 
     Write-Host ""
-    Write-Host ("Quelle : {0}" -f $PublicFolderPath)
-    Write-Host ("Ziel   : {0}  ({1})" -f $TargetMailboxName, $targetSmtp)
+    Write-Host ("Source : {0}" -f $PublicFolderPath)
+    Write-Host ("Target : {0}  ({1})" -f $TargetMailboxName, $targetSmtp)
 
-    # EWS connect – zwei getrennte Instanzen!
-    # $service      → fuer Public Folder Zugriff (bekommt PF-Routing-Header gesetzt)
-    # $targetService → fuer Ziel-Mailbox Zugriff, mit Impersonation auf Ziel-Mailbox
+    # Two separate EWS instances
+    # $service      → PF access (with PF routing headers set)
+    # $targetService → target mailbox access with impersonation
     $service       = Connect-Exchange -MailboxName $adminMbxSmtp -Url $Url
     $targetService = Connect-Exchange -MailboxName $adminMbxSmtp -Url $Url
 
-    # Impersonation auf Ziel-Mailbox setzen (benoetigt ApplicationImpersonation-Rolle)
+    # Set impersonation on target mailbox (requires ApplicationImpersonation role)
     $targetService.ImpersonatedUserId = New-Object Microsoft.Exchange.WebServices.Data.ImpersonatedUserId(
         [Microsoft.Exchange.WebServices.Data.ConnectingIdType]::SmtpAddress,
         $targetSmtp
     )
-    Write-Verbose ("EWS Impersonation gesetzt fuer [{0}]" -f $targetSmtp)
+    Write-Verbose ("EWS impersonation set for [{0}]" -f $targetSmtp)
 
-    # Autodiscover-URL einmalig ableiten (aus dem funktionierenden EWS-Host), falls nicht
-    # explizit per -AutodiscoverUrl uebergeben. Wird an alle PF-Routing-Aufrufe weitergereicht.
+    # Derive Autodiscover URL once from working EWS host (if not explicitly provided via -AutodiscoverUrl)
     if (-not $AutodiscoverUrl) {
         $AutodiscoverUrl = Resolve-AutodiscoverUrl -Service $service
         if ($AutodiscoverUrl) {
-            Write-Verbose ("Autodiscover-URL abgeleitet: {0}" -f $AutodiscoverUrl)
+            Write-Verbose ("Autodiscover URL derived: {0}" -f $AutodiscoverUrl)
         } else {
-            Write-Warning "Keine Autodiscover-URL ableitbar - PF-Routing-Header werden via SCP-Lookup versucht."
+            Write-Warning "No Autodiscover URL derivable - PF routing headers will be attempted via SCP lookup."
         }
     } else {
         Write-Verbose ("Autodiscover-URL (Parameter): {0}" -f $AutodiscoverUrl)
     }
 
-    # --- PREFLIGHT 1: ApplicationImpersonation-Rolle pruefen (frueher, sprechender Hinweis) ---
-    # Nicht hart abbrechen (effektive Nutzeraufloesung kann unzuverlaessig sein) -> nur warnen.
+    # PREFLIGHT 1: Check ApplicationImpersonation role (warn, don't fail – effective user resolution can be unreliable)
     try {
         $impAssign = Get-ManagementRoleAssignment -Role ApplicationImpersonation -GetEffectiveUsers -ErrorAction Stop |
                      Where-Object { $_.EffectiveUserName -eq $adminUser.Name -or $_.EffectiveUserName -eq $adminSam }
         if (-not $impAssign) {
-            Write-Warning (("Konnte keine ApplicationImpersonation-Rolle fuer [{0}] bestaetigen. " -f $adminSam) +
-                "Falls der Ziel-Zugriff scheitert: New-ManagementRoleAssignment -Role ApplicationImpersonation -User '$adminSam' (RBAC-Cache ~15 min).")
+            Write-Warning (("Could not confirm ApplicationImpersonation role for [{0}]. " -f $adminSam) +
+                "If target access fails: New-ManagementRoleAssignment -Role ApplicationImpersonation -User '$adminSam' (RBAC cache ~15 min).")
         } else {
-            Write-Verbose ("ApplicationImpersonation-Rolle fuer [{0}] vorhanden." -f $adminSam)
+            Write-Verbose ("ApplicationImpersonation role confirmed for [{0}]." -f $adminSam)
         }
     } catch {
-        Write-Verbose ("RBAC-Preflight uebersprungen: {0}" -f $_.Exception.Message)
+        Write-Verbose ("RBAC preflight skipped: {0}" -f $_.Exception.Message)
     }
 
-    # --- PREFLIGHT 2: EWS-Zugriff aufs Ziel AKTIV testen (Bind + Retry) ---
-    # Das wartet automatisch auf Store-Provisionierung einer frisch erstellten Mailbox
-    # UND validiert die Impersonation. Bei dauerhaftem 401/Impersonation-Fehler:
-    # sofortiger Abbruch mit klarer Meldung statt kryptischer Folgefehler.
-    Write-Verbose "Pruefe EWS-Zugriff auf Ziel-Mailbox (Impersonation)..."
-    # Frisch erstellte Mailboxen brauchen laenger bis der Store sie provisioniert
-    # -> groesseres Zeitfenster (ca. 5 Min) statt der Standard-2-Min.
+    # PREFLIGHT 2: Actively test EWS access to target (Bind + Retry)
+    # Waits for Store provisioning of newly created mailbox AND validates impersonation
+    # On permanent 401/impersonation error: fail fast with clear message instead of cryptic downstream errors
+    Write-Verbose "Testing EWS access to target mailbox (impersonation)..."
+    # Newly created mailboxes take longer for Store to provision → larger time window (~5 min) vs standard 2 min
     $accessAttempts = if ($mailboxJustCreated) { 30 } else { 12 }
-    Test-EwsMailboxAccess -Service $targetService -MailboxSmtp $targetSmtp -Context 'Ziel-Mailbox' -MaxAttempts $accessAttempts | Out-Null
+    Test-EwsMailboxAccess -Service $targetService -MailboxSmtp $targetSmtp -Context 'Target mailbox' -MaxAttempts $accessAttempts | Out-Null
 
     Write-Host ""
-    Write-Host ("Migriere {0} Ordner..." -f $folders.Count)
+    Write-Host ("Migrating {0} folders..." -f $folders.Count)
     $folderIndex = 0
 
     # Collect pf addresses during loop
@@ -246,36 +241,32 @@ if (-not $PublicFolderPath) {
         $fullPath = (($f.ParentPath + "\" + $f.Name).Replace("\\","\"))  # normalized
         $class    = $f.FolderClass
 
-        Write-Verbose ("[{0}/{1}] Processing [{2}] - FolderClass [{3}]" -f $folderIndex,$folders.Count,$fullPath,$class)
+        Write-Verbose ("[{0}/{1}] Processing [{2}] - FolderClass [{3}]" -f $folderIndex, $folders.Count, $fullPath, $class)
 
-        # PF-Routing-Header fuer jede Iteration neu bestimmen (verhindert Stale-Header
-        # falls Ordner in unterschiedlichen PF-Postfaechlern liegen)
+        # Redetermine PF routing headers per iteration (prevents stale headers if folders in different PF mailboxes)
         foreach ($hdr in @('X-AnchorMailbox','X-PublicFolderMailbox')) {
-            # [void]: .Remove() liefert einen Bool zurueck, der sonst als "True"
-            # in die Konsole leakt (das war die Quelle der "True/True"-Ausgabe).
+            # [void]: .Remove() returns bool, suppress from output stream
             if ($service.HttpHeaders.ContainsKey($hdr)) { [void]$service.HttpHeaders.Remove($hdr) }
         }
 
 
-        # Ensure parent chain exists (and traversal permission for Default)
+        # Create parent folder chain and set traversal permissions
         $parentPath = $f.ParentPath
 
         if ($parentPath -and $parentPath -ne '\') {
-            # Segmente sicher erzeugen UND als string[] materialisieren.
-            # Explizite Typisierung + Cast pro Element verhindert, dass PS 5.1 bei
-            # einelementigem Where-Object-Output einen Skalar/Boolean leaked.
-            # Beispiel: '\Folder1\Folder1.2' -> @('Folder1','Folder1.2')
+            # Split path safely. Explicit [string[]] typing prevents PS 5.1 scalar coercion
+            # when Where-Object returns single element. Example: '\Folder1\Folder1.2' → @('Folder1','Folder1.2')
             [string[]]$segments = $parentPath.Trim('\').Split('\') | Where-Object { $_ -ne '' } | ForEach-Object { [string]$_ }
 
             $parentAgg      = $null     # kumulierter Pfad: '\Folder1', dann '\Folder1\Folder1.2'
             $parentForCreate = '\'      # Start-Eltern ist der Root
 
             foreach ($seg in $segments) {
-                # 1) Elternordner anlegen (existenzsicher) – targetService (kein PF-Routing!)
-                #    Rueckgabe erfassen: meldet, ob NEU erstellt (kein Pipeline-Leak).
+                # 1) Create parent folder (idempotent) via targetService (no PF routing)
+                # Capture return: reports if NEW created (no pipeline leak)
                 $cfParent = Create-Folder -MailboxName $targetSmtp -Service $targetService -NewFolderName $seg -ParentFolder $parentForCreate
 
-                # 2) Traversal (Default = Reviewer) auf dem aktuellen Parent sicherstellen
+                # 2) Ensure traversal (Default = Reviewer) on current parent
                 $pathForCmd = ('{0}:{1}' -f $targetAlias, $parentForCreate)
                 if ($PSCmdlet.ShouldProcess(("Folder '{0}'" -f $pathForCmd), "Ensure Default Reviewer (traversal)")) {
                     try {
@@ -285,7 +276,7 @@ if (-not $PublicFolderPath) {
                     }
                 }
 
-                # 3) Aggregierten Parentpfad fortschreiben: neuer Parent ist der eben erstellte Ordner
+                # 3) Update aggregated parent path: new parent is just-created folder
                 if ([string]::IsNullOrEmpty($parentAgg)) {
                     $parentAgg = "\" + $seg
                 } else {
@@ -293,14 +284,14 @@ if (-not $PublicFolderPath) {
                 }
                 $parentForCreate = $parentAgg
 
-                # Neu erstellte Elternordner fuer die Endabrechnung merken
+                # Track newly created parent folders for final summary
                 if ($cfParent -and $cfParent.Created -and -not $createdParents.Contains($parentAgg)) {
                     $createdParents.Add($parentAgg)
                 }
             }
         }
         else {
-            # Top-Level-Fall: keine Elternkette, nur Traversal auf Root (harmlos wenn schon gesetzt)
+            # Top-level case: no parent chain, only traversal on root (harmless if already set)
             $pathForCmd = ('{0}:{1}' -f $targetAlias, '\')
             if ($PSCmdlet.ShouldProcess(("Folder '{0}'" -f $pathForCmd), "Ensure Default Reviewer (root traversal)")) {
                 try {
@@ -339,7 +330,7 @@ if (-not $PublicFolderPath) {
         }
 
         # Mail-enabled PF?
-        Write-Verbose "Collecting mail addresses..."
+        Write-Verbose "Collecting mail addresses..."  # Already in English
         try {
             $mailpf = Get-MailPublicFolder -Identity $fullPath -ErrorAction Stop
         } catch {
