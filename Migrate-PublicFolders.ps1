@@ -23,7 +23,7 @@ param(
 )
 
 # Load functions
-. "$PSScriptRoot\PFmig-Functions.Refactored.ps1"
+. "$PSScriptRoot\PFmig-Functions.ps1"
 
 cd $PSScriptRoot
 $start = Get-Date
