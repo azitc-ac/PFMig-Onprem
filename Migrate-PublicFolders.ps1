@@ -480,6 +480,7 @@ if (-not $PublicFolderPath) {
     # Calculate totals
     $sumCopied = 0; $sumSkipped = 0; $sumFailed = 0; $sumOversized = 0
     $allOversizedItems = @()
+    $allFailedItems = @()
     foreach ($r in $migrationResults) {
         if ($null -eq $r) { continue }
         $sumCopied     += [int]$r.ItemsCopied
@@ -488,6 +489,9 @@ if (-not $PublicFolderPath) {
         $sumOversized  += [int]$r.ItemsOversized
         if ($r.OversizedList -and $r.OversizedList.Count -gt 0) {
             $allOversizedItems += $r.OversizedList
+        }
+        if ($r.FailedList -and $r.FailedList.Count -gt 0) {
+            $allFailedItems += $r.FailedList
         }
     }
 
@@ -511,6 +515,11 @@ if (-not $PublicFolderPath) {
     }
     Write-Host ("  Items copied       : {0}  (skipped {1}, failed {2}, oversized {3})" -f $sumCopied, $sumSkipped, $sumFailed, $sumOversized) `
         -ForegroundColor $(if ($sumFailed -gt 0 -or $sumOversized -gt 0) { 'Yellow' } else { 'Green' })
+
+    if ($sumFailed -gt 0) {
+        Write-Host ("  WARNING            : {0} item(s) failed to copy (EWS errors)" -f $sumFailed) -ForegroundColor Red
+        Write-Host "                       Details saved to: PFMig_[timestamp]_failed.csv" -ForegroundColor Red
+    }
 
     if ($sumOversized -gt 0) {
         Write-Host ("  WARNING            : {0} item(s) exceeding MaxItemSize ({1} MB) were skipped" -f $sumOversized, ($MaxItemSize / 1MB)) -ForegroundColor Yellow
@@ -555,6 +564,19 @@ if (-not $PublicFolderPath) {
             Write-Host ("  Report             : {0}" -f $reportCsv)
         } catch {
             Write-Warning ("Could not write report '{0}': {1}" -f $reportCsv, $_.Exception.Message)
+        }
+    }
+
+    # Report for failed items (separate CSV)
+    if ($allFailedItems.Count -gt 0) {
+        $failedCsv = Join-Path $PSScriptRoot ("PFMig_{0:yyyyMMdd_HHmmss}_failed.csv" -f $start)
+        try {
+            $allFailedItems |
+                Select-Object Subject, Size, ErrorMessage, UID |
+                Export-Csv -Path $failedCsv -NoTypeInformation -Encoding $csvEncoding -ErrorAction Stop
+            Write-Host ("  Failed items       : {0}" -f $failedCsv) -ForegroundColor Red
+        } catch {
+            Write-Warning ("Could not write failed report '{0}': {1}" -f $failedCsv, $_.Exception.Message)
         }
     }
 

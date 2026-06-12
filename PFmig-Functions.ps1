@@ -658,6 +658,7 @@ function Get-PublicFolderItems {
         ItemsFailed     = 0
         ItemsOversized  = 0  # Items exceeding MaxItemSize
         OversizedList   = @()  # Track oversized items for reporting
+        FailedList      = @()  # Track items that failed to copy (for audit)
         Status          = 'OK'
         Error           = $null
     }
@@ -812,7 +813,17 @@ function Get-PublicFolderItems {
                         $result.ItemsCopied++
                     } catch {
                         $result.ItemsFailed++
-                        Write-Warning ("Item '{0}' (UID {1}) could not be copied: {2}" -f $subject, $uid, $_.Exception.Message)
+                        $errorMsg = $_.Exception.Message
+                        Write-Warning ("Item '{0}' (UID {1}) could not be copied: {2}" -f $subject, $uid, $errorMsg)
+
+                        # Track failed items for audit report
+                        $sizeStr = if ($itemSize) { "{0:N0} bytes ({1:F2} MB)" -f $itemSize, ($itemSize / 1MB) } else { "Unknown" }
+                        [void]$result.FailedList.Add([pscustomobject]@{
+                            Subject = $subject
+                            Size = $sizeStr
+                            ErrorMessage = $errorMsg
+                            UID = $uid
+                        })
                     }
                 }
             }
