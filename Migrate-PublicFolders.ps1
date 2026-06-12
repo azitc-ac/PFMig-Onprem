@@ -478,12 +478,17 @@ if (-not $PublicFolderPath) {
     }
 
     # Calculate totals
-    $sumCopied = 0; $sumSkipped = 0; $sumFailed = 0
+    $sumCopied = 0; $sumSkipped = 0; $sumFailed = 0; $sumOversized = 0
+    $allOversizedItems = @()
     foreach ($r in $migrationResults) {
         if ($null -eq $r) { continue }
-        $sumCopied  += [int]$r.ItemsCopied
-        $sumSkipped += [int]$r.ItemsSkipped
-        $sumFailed  += [int]$r.ItemsFailed
+        $sumCopied     += [int]$r.ItemsCopied
+        $sumSkipped    += [int]$r.ItemsSkipped
+        $sumFailed     += [int]$r.ItemsFailed
+        $sumOversized  += [int]$r.ItemsOversized
+        if ($r.OversizedList -and $r.OversizedList.Count -gt 0) {
+            $allOversizedItems += $r.OversizedList
+        }
     }
 
     # Detail table only with -Verbose
@@ -504,12 +509,18 @@ if (-not $PublicFolderPath) {
     } else {
         Write-Host  "  New folders        : 0 (all already existed)"
     }
-    Write-Host ("  Items copied       : {0}  (skipped {1}, failed {2})" -f $sumCopied, $sumSkipped, $sumFailed) `
-        -ForegroundColor $(if ($sumFailed -gt 0) { 'Yellow' } else { 'Green' })
+    Write-Host ("  Items copied       : {0}  (skipped {1}, failed {2}, oversized {3})" -f $sumCopied, $sumSkipped, $sumFailed, $sumOversized) `
+        -ForegroundColor $(if ($sumFailed -gt 0 -or $sumOversized -gt 0) { 'Yellow' } else { 'Green' })
+
+    if ($sumOversized -gt 0) {
+        Write-Host ("  WARNING            : {0} item(s) exceeding MaxItemSize ({1} MB) were skipped" -f $sumOversized, ($MaxItemSize / 1MB)) -ForegroundColor Yellow
+        Write-Host "                       These items may be corrupted or contain large embedded data."
+        Write-Host ("                       Details saved to: PFMig_{0:yyyyMMdd_HHmmss}_oversized.csv" -f $start) -ForegroundColor Yellow
+    }
 
     if ($DoNotCopyItems) {
         Write-Host "  Note               : -DoNotCopyItems active (folder structure only)."
-    } elseif ($sumCopied -eq 0 -and $sumSkipped -eq 0) {
+    } elseif ($sumCopied -eq 0 -and $sumSkipped -eq 0 -and $sumOversized -eq 0) {
         Write-Host "  WARNING            : NOTHING copied (0 items). Check source access/permissions, or source folder empty." -ForegroundColor Red
     } elseif ($sumCopied -eq 0 -and $sumSkipped -gt 0) {
         Write-Host "  Note               : 0 newly copied - all items already exist per copy log."
@@ -543,7 +554,20 @@ if (-not $PublicFolderPath) {
                 Export-Csv -Path $reportCsv -NoTypeInformation -Encoding $csvEncoding -ErrorAction Stop
             Write-Host ("  Report             : {0}" -f $reportCsv)
         } catch {
-            Write-Warning ("Konnte Report '{0}' nicht schreiben: {1}" -f $reportCsv, $_.Exception.Message)
+            Write-Warning ("Could not write report '{0}': {1}" -f $reportCsv, $_.Exception.Message)
+        }
+    }
+
+    # Report for oversized items (separate CSV)
+    if ($allOversizedItems.Count -gt 0) {
+        $oversizedCsv = Join-Path $PSScriptRoot ("PFMig_{0:yyyyMMdd_HHmmss}_oversized.csv" -f $start)
+        try {
+            $allOversizedItems |
+                Select-Object Subject, Size, MaxAllowed, UID |
+                Export-Csv -Path $oversizedCsv -NoTypeInformation -Encoding $csvEncoding -ErrorAction Stop
+            Write-Host ("  Oversized items    : {0}" -f $oversizedCsv) -ForegroundColor Yellow
+        } catch {
+            Write-Warning ("Could not write oversized report '{0}': {1}" -f $oversizedCsv, $_.Exception.Message)
         }
     }
     # =======================================================================
