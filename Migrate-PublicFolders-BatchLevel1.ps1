@@ -52,9 +52,11 @@ if ($level1Folders.Count -eq 0) {
 
 Write-Host "Found $($level1Folders.Count) Level-1 folder(s)`n" -ForegroundColor Green
 
-# Pre-check: determine which folders are mail-enabled
-Write-Host "Checking mail-enabled status..." -ForegroundColor Yellow
+# Pre-check: determine which folders are mail-enabled (including subfolders)
+Write-Host "Checking mail-enabled status (including subfolders)..." -ForegroundColor Yellow
 $folderStatus = @()
+$folderHierarchy = @()
+
 foreach ($folder in $level1Folders) {
     $sourcePath = "\$($folder.Name)"
     $isMailEnabled = $false
@@ -70,14 +72,70 @@ foreach ($folder in $level1Folders) {
         Name = $folder.Name
         Path = $sourcePath
         MailEnabled = $isMailEnabled
+        IsSubfolder = $false
+    }
+
+    $folderHierarchy += [pscustomobject]@{
+        Path = $sourcePath
+        MailEnabled = $isMailEnabled
+        Level = 0
+        Children = @()
+    }
+
+    # Check subfolders
+    try {
+        $subfolders = @(Get-PublicFolder -Identity $sourcePath -Recurse -ErrorAction Stop |
+            Where-Object { $_.ParentPath -like "$sourcePath*" -and $_.ParentPath -ne $sourcePath })
+
+        foreach ($subfolder in $subfolders) {
+            $subPath = $subfolder.ParentPath + "\" + $subfolder.Name
+            $subIsMailEnabled = $false
+
+            try {
+                $subMailpf = Get-MailPublicFolder -Identity $subPath -ErrorAction SilentlyContinue
+                $subIsMailEnabled = $true
+            } catch {
+                # Not mail-enabled
+            }
+
+            $folderStatus += [pscustomobject]@{
+                Name = $subfolder.Name
+                Path = $subPath
+                MailEnabled = $subIsMailEnabled
+                IsSubfolder = $true
+            }
+
+            $lastHierarchy = $folderHierarchy | Where-Object { $_.Path -eq $sourcePath } | Select-Object -Last 1
+            if ($lastHierarchy) {
+                $lastHierarchy.Children += [pscustomobject]@{
+                    Path = $subPath
+                    MailEnabled = $subIsMailEnabled
+                }
+            }
+        }
+    } catch {
+        # Subfolder enumeration error
     }
 }
 
 Write-Host ""
-Write-Host "Folder Status:" -ForegroundColor Cyan
-foreach ($fs in $folderStatus) {
-    $mailIcon = if ($fs.MailEnabled) { "[✓ mail-enabled]" } else { "[ ]" }
-    Write-Host ("  {0,-40} {1}" -f $fs.Path, $mailIcon) -ForegroundColor $(if ($fs.MailEnabled) { 'Green' } else { 'Gray' })
+Write-Host "Folder Hierarchy (mail-enabled status):" -ForegroundColor Cyan
+foreach ($item in $folderHierarchy) {
+    $mailIcon = if ($item.MailEnabled) { "[✓]" } else { "[ ]" }
+    Write-Host ("  {0,-50} {1}" -f $item.Path, $mailIcon) -ForegroundColor $(if ($item.MailEnabled) { 'Green' } else { 'Gray' })
+
+    foreach ($child in $item.Children) {
+        $childMailIcon = if ($child.MailEnabled) { "[✓]" } else { "[ ]" }
+        Write-Host ("    ├─ {0,-46} {1}" -f $child.Path, $childMailIcon) -ForegroundColor $(if ($child.MailEnabled) { 'Yellow' } else { 'Gray' })
+    }
+}
+Write-Host ""
+
+# Summary of mail-enabled folders for cutover
+$mailEnabledCount = @($folderStatus | Where-Object { $_.MailEnabled }).Count
+if ($mailEnabledCount -gt 0) {
+    Write-Host "Mail-enabled folders detected: $mailEnabledCount" -ForegroundColor Green
+    Write-Host "These will be considered for mailflow cutover if -CutoverMailflow is used.`n" -ForegroundColor Green
 }
 Write-Host ""
 
