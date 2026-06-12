@@ -637,7 +637,8 @@ function Get-PublicFolderItems {
         [Parameter(Mandatory=$true)][string]$FolderName,
         [Parameter()][string]$FolderClass,
         [Parameter()][string]$AutodiscoverUrl,
-        [Parameter()][switch]$DoNotCopyItems
+        [Parameter()][switch]$DoNotCopyItems,
+        [Parameter()][long]$MaxItemSize = 10MB  # Skip items larger than this
     )
     # Pre-calculate path in target mailbox (for reporting even on errors)
     if ([string]::IsNullOrEmpty($ParentPath) -or $ParentPath -eq '\') {
@@ -649,14 +650,16 @@ function Get-PublicFolderItems {
     # Result object returned at the end (even on errors)
     # so orchestrator can generate meaningful final accounting
     $result = [pscustomobject]@{
-        SourcePath    = $PublicFolderPath
-        TargetPath    = $targetFolderPath
-        FolderCreated = $false
-        ItemsCopied   = 0
-        ItemsSkipped  = 0
-        ItemsFailed   = 0
-        Status        = 'OK'
-        Error         = $null
+        SourcePath      = $PublicFolderPath
+        TargetPath      = $targetFolderPath
+        FolderCreated   = $false
+        ItemsCopied     = 0
+        ItemsSkipped    = 0
+        ItemsFailed     = 0
+        ItemsOversized  = 0  # Items exceeding MaxItemSize
+        OversizedList   = @()  # Track oversized items for reporting
+        Status          = 'OK'
+        Error           = $null
     }
 
     # --- SOURCE: Determine public folder ID (PF service) ---
@@ -704,6 +707,18 @@ function Get-PublicFolderItems {
         $result.Error  = ("Target folder '{0}' in mailbox '{1}' not found after creation." -f $targetFolderPath, $TargetMailboxSmtp)
         Write-Error $result.Error
         return $result
+    }
+
+    # Pre-load item sizes to filter oversized items
+    Write-Verbose ("Pre-checking item sizes (MaxItemSize: {0} bytes)" -f $MaxItemSize)
+    $itemSizes = @{}
+    try {
+        $sizeStats = Get-PublicFolderItemStatistics -Identity $PublicFolderPath -ErrorAction SilentlyContinue
+        foreach ($stat in $sizeStats) {
+            $itemSizes[$stat.EntryId] = $stat.MessageSize
+        }
+    } catch {
+        Write-Verbose ("Could not pre-load item sizes: {0}" -f $_.Exception.Message)
     }
 
     # Paging
@@ -761,7 +776,30 @@ function Get-PublicFolderItems {
             if ($already -contains $uid) {
                 $result.ItemsSkipped++
             } else {
-                if ($PSCmdlet.ShouldProcess(("Item '{0}'" -f $subject), ("Copy to {0}" -f $targetFolder.DisplayName))) {
+                # Pre-check for oversized items
+                $isOversized = $false
+                try {
+                    # Try to get item size via Bind with minimal property set
+                    $ps = New-Object Microsoft.Exchange.WebServices.Data.PropertySet([Microsoft.Exchange.WebServices.Data.BasePropertySet]::IdOnly)
+                    $boundItem = [Microsoft.Exchange.WebServices.Data.Item]::Bind($Service, $item.Id, $ps)
+                    $itemSize = $boundItem.Size
+                    if ($itemSize -gt $MaxItemSize) {
+                        $isOversized = $true
+                    }
+                } catch {
+                    # Can't determine size; try to copy anyway
+                }
+
+                if ($isOversized) {
+                    $result.ItemsOversized++
+                    [void]$result.OversizedList.Add([pscustomobject]@{
+                        Subject = $subject
+                        Size = "{0:N0} bytes ({1:F2} MB)" -f $itemSize, ($itemSize / 1MB)
+                        MaxAllowed = "{0:N0} bytes ({1:F2} MB)" -f $MaxItemSize, ($MaxItemSize / 1MB)
+                        UID = $uid
+                    })
+                    Write-Verbose ("Skipping oversized item '{0}': {1:F2} MB (max: {2:F2} MB)" -f $subject, ($itemSize / 1MB), ($MaxItemSize / 1MB))
+                } elseif ($PSCmdlet.ShouldProcess(("Item '{0}'" -f $subject), ("Copy to {0}" -f $targetFolder.DisplayName))) {
                     # Secure individual item: one error must not kill entire migration.
                     try {
                         # [void]: Item.Copy() returns copied item – otherwise it leaks

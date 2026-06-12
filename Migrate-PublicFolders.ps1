@@ -19,7 +19,8 @@ param(
     [ValidateSet('FullMailbox','FolderACL')][string]$PermissionMode = 'FullMailbox',
     [string]$Url,
     [string]$AutodiscoverUrl,
-    [string]$AdditionalAdminSam
+    [string]$AdditionalAdminSam,
+    [long]$MaxItemSize = 10MB  # Skip items larger than this (10MB default)
 )
 
 # Load functions
@@ -319,7 +320,8 @@ if (-not $PublicFolderPath) {
             -FolderName $f.Name `
             -FolderClass $class `
             -AutodiscoverUrl $AutodiscoverUrl `
-            -DoNotCopyItems:$DoNotCopyItems
+            -DoNotCopyItems:$DoNotCopyItems `
+            -MaxItemSize $MaxItemSize
         # Defensive: nur echte Ergebnisobjekte aufnehmen (falls eine EWS-Methode wider
         # Erwarten doch einmal etwas in den Output-Stream leakt).
         $pfiResult = @($pfiResult) |
