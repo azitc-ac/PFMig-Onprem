@@ -801,6 +801,9 @@ function Get-PublicFolderItems {
                         MaxAllowed = $maxStr
                         UID = $uid
                     })
+                    # Log oversized items so they're skipped on next run (prevent repeated Bind attempts)
+                    [pscustomobject]@{ UniqueId = $uid; Status = 'Oversized' } |
+                        Export-Csv $copyLog -NoTypeInformation -Encoding UTF8 -Append
                     Write-Verbose ("Skipping oversized item '{0}': {1:F2} MB (max: {2:F2} MB)" -f $subject, ($itemSize / 1MB), ($MaxItemSize / 1MB))
                 } elseif ($PSCmdlet.ShouldProcess(("Item '{0}'" -f $subject), ("Copy to {0}" -f $targetFolder.DisplayName))) {
                     # Secure individual item: one error must not kill entire migration.
@@ -815,6 +818,10 @@ function Get-PublicFolderItems {
                         $result.ItemsFailed++
                         $errorMsg = $_.Exception.Message
                         Write-Warning ("Item '{0}' (UID {1}) could not be copied: {2}" -f $subject, $uid, $errorMsg)
+
+                        # Log failed items so they're not retried on next run
+                        [pscustomobject]@{ UniqueId = $uid; Status = 'Failed' } |
+                            Export-Csv $copyLog -NoTypeInformation -Encoding UTF8 -Append
 
                         # Track failed items for audit report
                         $sizeStr = if ($itemSize) { "{0:N0} bytes ({1:F2} MB)" -f $itemSize, ($itemSize / 1MB) } else { "Unknown" }
