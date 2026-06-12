@@ -30,8 +30,8 @@ $start = Get-Date
 $log   = Join-Path $PSScriptRoot ("PFMig_{0:yyyyMMdd_HHmmss}.log" -f $start)
 Start-Transcript -Path $log -Append | Out-Null
 
-# Version-bewusstes CSV-Encoding: PS 5.1 schreibt mit 'UTF8' bereits BOM,
-# PS 6+/7 braucht 'utf8BOM' fuer dasselbe Ergebnis.
+# Version-aware CSV encoding: PS 5.1 writes 'UTF8' with BOM already,
+# PS 6+/7 needs 'utf8BOM' for same result
 $csvEncoding = if ($PSVersionTable.PSVersion.Major -ge 6) { 'utf8BOM' } else { 'UTF8' }
 
 try {
@@ -59,24 +59,24 @@ try {
 
 # Get PF path (OGV retained, robust)
 if (-not $PublicFolderPath) {
-    # Liste vollständig materialisieren (verhindert Timing-/Lazy-Probleme)
+    # Materialize list completely (prevents timing/lazy loading issues)
     $pfList = @(
         Get-PublicFolder -Recurse |
         Where-Object { $_.ParentPath } |
         Select-Object Name, ParentPath
     )
 
-    # Auswahl EXPLIZIT übernehmen
+    # Capture selection explicitly
     $selection = $pfList | Out-GridView -PassThru -Title "Select the source PF structure"
 
-    if (-not $selection) { Write-Host "Abgebrochen."; return }
+    if (-not $selection) { Write-Host "Cancelled."; return }
 
-    # Wenn mehrere gewählt wurden → ersten verwenden
+    # If multiple were selected → use first one
     if ($selection -is [System.Array]) {
         $selection = $selection | Select-Object -First 1
     }
 
-    # Pfad bestimmen
+    # Determine path
     if ($selection.Name -eq "IPM_SUBTREE") {
         $PublicFolderPath = "\"
     } else {
@@ -105,8 +105,8 @@ if (-not $PublicFolderPath) {
     if (-not $mbx) {
         $mailboxJustCreated = $true
         if (-not $OUforMBX) {
-            # Kein OU-DN per Parameter -> gespeicherten Pfad anbieten bzw. OGV-Auswahl
-            # (siehe Get-TargetOU). Auswahl wird in dieser .config-Datei persistiert.
+            # No OU-DN per parameter → offer saved path or OGV selection
+            # (see Get-TargetOU). Selection is persisted to this config file.
             $ouConfig = Join-Path $PSScriptRoot 'PFMig.OU.config'
             $ouDn = Get-TargetOU -ConfigPath $ouConfig
             if (-not $ouDn) { Write-Host "Cancelled."; return }
@@ -328,10 +328,10 @@ if (-not $PublicFolderPath) {
         if ($pfiResult) {
             [void]$migrationResults.Add($pfiResult)
 
-            # Eine ruhige Statuszeile pro Ordner. Farbe nur bei Problem.
-            $problem = ($pfiResult.ItemsFailed -gt 0) -or ($pfiResult.Status -notin @('OK','NurOrdner'))
+            # Quiet status line per folder. Color only on problem.
+            $problem = ($pfiResult.ItemsFailed -gt 0) -or ($pfiResult.Status -notin @('OK','FolderOnly'))
             $mark    = if ($problem) { '!' } else { 'ok' }
-            $line = ("  [{0}/{1}] {2,-40} kopiert {3}, uebersprungen {4}, Fehler {5}  {6}" -f `
+            $line = ("  [{0}/{1}] {2,-40} copied {3}, skipped {4}, failed {5}  {6}" -f `
                         $folderIndex, $folders.Count, $fullPath, `
                         $pfiResult.ItemsCopied, $pfiResult.ItemsSkipped, $pfiResult.ItemsFailed, $mark)
             if ($problem) { Write-Host $line -ForegroundColor Yellow } else { Write-Host $line }
@@ -373,7 +373,7 @@ if (-not $PublicFolderPath) {
             $user = $perm.User
             $rights = $perm.AccessRights
 
-            # Default/Anonymous werden auf Ordner gesetzt (nicht auf Mailbox)
+            # Default/Anonymous are set on folder (not mailbox)
             if ($user.DisplayName -in @('None','Default','Standard','Anonymous','Anonym')) {
                 $pathForCmd = ('{0}:{1}' -f $targetAlias, $fullPath)
                 if ($PSCmdlet.ShouldProcess(("Folder '{0}'" -f $pathForCmd),("Set permission for '{0}'" -f $user))) {
@@ -402,7 +402,7 @@ if (-not $PublicFolderPath) {
                         }
                     }
                 } else {
-                    # Präzise: ACL auf Zielordner
+                    # Precise: ACL on target folder
                     $pathForCmd = ('{0}:{1}' -f $targetAlias, $fullPath)
                     if ($PSCmdlet.ShouldProcess(("Folder '{0}'" -f $pathForCmd),("Add folder permission for '{0}'" -f $user))) {
                         try {
@@ -467,15 +467,15 @@ if (-not $PublicFolderPath) {
         }
     }
 
-    # ============================ ENDABRECHNUNG ============================
-    # Neu erstellte Ordner (Eltern + Blatt) sammeln
+    # ============================ SUMMARY ============================
+    # Collect newly created folders (parents + leaf)
     $allCreated = New-Object System.Collections.Generic.List[string]
     foreach ($p in $createdParents) { if (-not $allCreated.Contains($p)) { $allCreated.Add($p) } }
     foreach ($r in $migrationResults) {
         if ($r.FolderCreated -and -not $allCreated.Contains($r.TargetPath)) { $allCreated.Add($r.TargetPath) }
     }
 
-    # Summen
+    # Calculate totals
     $sumCopied = 0; $sumSkipped = 0; $sumFailed = 0
     foreach ($r in $migrationResults) {
         if ($null -eq $r) { continue }
@@ -484,36 +484,36 @@ if (-not $PublicFolderPath) {
         $sumFailed  += [int]$r.ItemsFailed
     }
 
-    # Detail-Tabelle nur bei -Verbose
+    # Detail table only with -Verbose
     if ($migrationResults.Count -gt 0) {
         Write-Verbose (($migrationResults |
-            Select-Object @{N='Quelle';E={$_.SourcePath}}, @{N='Ziel';E={$_.TargetPath}},
-                          @{N='Neu';E={$_.FolderCreated}}, @{N='Kopiert';E={$_.ItemsCopied}},
-                          @{N='Skip';E={$_.ItemsSkipped}}, @{N='Fehler';E={$_.ItemsFailed}},
+            Select-Object @{N='Source';E={$_.SourcePath}}, @{N='Target';E={$_.TargetPath}},
+                          @{N='Created';E={$_.FolderCreated}}, @{N='Copied';E={$_.ItemsCopied}},
+                          @{N='Skipped';E={$_.ItemsSkipped}}, @{N='Failed';E={$_.ItemsFailed}},
                           @{N='Status';E={$_.Status}} |
             Format-Table -AutoSize | Out-String))
     }
 
-    Write-Host "`nZusammenfassung"
-    Write-Host ("  Ordner verarbeitet : {0}" -f $migrationResults.Count)
+    Write-Host "`nSummary"
+    Write-Host ("  Folders processed  : {0}" -f $migrationResults.Count)
     if ($allCreated.Count -gt 0) {
-        Write-Host ("  Neue Ordner        : {0}" -f $allCreated.Count)
+        Write-Host ("  New folders        : {0}" -f $allCreated.Count)
         foreach ($c in $allCreated) { Write-Host ("      + {0}" -f $c) }
     } else {
-        Write-Host  "  Neue Ordner        : 0 (alle bereits vorhanden)"
+        Write-Host  "  New folders        : 0 (all already existed)"
     }
-    Write-Host ("  Items kopiert      : {0}  (uebersprungen {1}, Fehler {2})" -f $sumCopied, $sumSkipped, $sumFailed) `
+    Write-Host ("  Items copied       : {0}  (skipped {1}, failed {2})" -f $sumCopied, $sumSkipped, $sumFailed) `
         -ForegroundColor $(if ($sumFailed -gt 0) { 'Yellow' } else { 'Green' })
 
     if ($DoNotCopyItems) {
-        Write-Host "  Hinweis            : -DoNotCopyItems aktiv (nur Ordnerstruktur)."
+        Write-Host "  Note               : -DoNotCopyItems active (folder structure only)."
     } elseif ($sumCopied -eq 0 -and $sumSkipped -eq 0) {
-        Write-Host "  ACHTUNG            : Es wurde NICHTS kopiert (0 Items). Quell-Zugriff/Berechtigung pruefen, oder Quellordner leer." -ForegroundColor Red
+        Write-Host "  WARNING            : NOTHING copied (0 items). Check source access/permissions, or source folder empty." -ForegroundColor Red
     } elseif ($sumCopied -eq 0 -and $sumSkipped -gt 0) {
-        Write-Host "  Hinweis            : 0 neu kopiert - alle Items laut Kopier-Log bereits vorhanden."
+        Write-Host "  Note               : 0 newly copied - all items already exist per copy log."
     }
 
-    $failedFolders = @($migrationResults | Where-Object { $_.Status -notin @('OK','NurOrdner','TeilweiseFehlgeschlagen') })
+    $failedFolders = @($migrationResults | Where-Object { $_.Status -notin @('OK','FolderOnly','PartiallyFailed') })
     if ($failedFolders.Count -gt 0) {
         Write-Host ("  Ordner mit Fehlern : {0}" -f $failedFolders.Count) -ForegroundColor Red
         foreach ($ff in $failedFolders) {
