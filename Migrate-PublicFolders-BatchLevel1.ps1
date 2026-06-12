@@ -52,6 +52,35 @@ if ($level1Folders.Count -eq 0) {
 
 Write-Host "Found $($level1Folders.Count) Level-1 folder(s)`n" -ForegroundColor Green
 
+# Pre-check: determine which folders are mail-enabled
+Write-Host "Checking mail-enabled status..." -ForegroundColor Yellow
+$folderStatus = @()
+foreach ($folder in $level1Folders) {
+    $sourcePath = "\$($folder.Name)"
+    $isMailEnabled = $false
+
+    try {
+        $mailpf = Get-MailPublicFolder -Identity $sourcePath -ErrorAction Stop
+        $isMailEnabled = $true
+    } catch {
+        # Not mail-enabled or error
+    }
+
+    $folderStatus += [pscustomobject]@{
+        Name = $folder.Name
+        Path = $sourcePath
+        MailEnabled = $isMailEnabled
+    }
+}
+
+Write-Host ""
+Write-Host "Folder Status:" -ForegroundColor Cyan
+foreach ($fs in $folderStatus) {
+    $mailIcon = if ($fs.MailEnabled) { "[✓ mail-enabled]" } else { "[ ]" }
+    Write-Host ("  {0,-40} {1}" -f $fs.Path, $mailIcon) -ForegroundColor $(if ($fs.MailEnabled) { 'Green' } else { 'Gray' })
+}
+Write-Host ""
+
 $successCount = 0
 $failCount = 0
 
@@ -61,8 +90,12 @@ foreach ($folder in $level1Folders) {
     $sourcePath = "\$folderName"
     $targetMailbox = Get-TargetMailboxName -PublicFolderPath $sourcePath
 
+    # Get mail-enabled status for this folder
+    $status = $folderStatus | Where-Object { $_.Name -eq $folderName } | Select-Object -First 1
+    $mailInfo = if ($status.MailEnabled) { " [MAIL-ENABLED]" } else { "" }
+
     Write-Host ("=" * 80) -ForegroundColor Cyan
-    Write-Host "Batch: $sourcePath → $targetMailbox" -ForegroundColor Cyan
+    Write-Host ("Batch: {0} → {1}{2}" -f $sourcePath, $targetMailbox, $mailInfo) -ForegroundColor $(if ($status.MailEnabled) { 'Green' } else { 'Cyan' })
     Write-Host ("=" * 80) -ForegroundColor Cyan
 
     # Build parameters for child script
