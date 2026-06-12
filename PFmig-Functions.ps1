@@ -792,10 +792,12 @@ function Get-PublicFolderItems {
 
                 if ($isOversized) {
                     $result.ItemsOversized++
+                    $sizeStr = "{0:N0} bytes ({1:F2} MB)" -f $itemSize, ($itemSize / 1MB)
+                    $maxStr = "{0:N0} bytes ({1:F2} MB)" -f $MaxItemSize, ($MaxItemSize / 1MB)
                     [void]$result.OversizedList.Add([pscustomobject]@{
                         Subject = $subject
-                        Size = "{0:N0} bytes ({1:F2} MB)" -f $itemSize, ($itemSize / 1MB)
-                        MaxAllowed = "{0:N0} bytes ({1:F2} MB)" -f $MaxItemSize, ($MaxItemSize / 1MB)
+                        Size = $sizeStr
+                        MaxAllowed = $maxStr
                         UID = $uid
                     })
                     Write-Verbose ("Skipping oversized item '{0}': {1:F2} MB (max: {2:F2} MB)" -f $subject, ($itemSize / 1MB), ($MaxItemSize / 1MB))

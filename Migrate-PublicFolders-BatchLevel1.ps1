@@ -41,7 +41,7 @@ function Get-TargetMailboxName {
 
 # Get all Level-1 folders (direct children of root)
 Write-Host "`nFetching Level-1 public folders..." -ForegroundColor Green
-$level1Folders = @(Get-PublicFolder |
+$level1Folders = @(Get-PublicFolder -Recurse |
     Where-Object { $_.ParentPath -eq "\" } |
     Select-Object Name, ParentPath)
 
