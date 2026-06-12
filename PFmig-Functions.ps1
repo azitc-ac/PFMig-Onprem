@@ -720,7 +720,10 @@ function Get-PublicFolderItems {
         Write-Verbose "No file with previous copy results found"
     }
 
-    $idx = 0; $itemTotal = 0
+    # Global item counter (spans all batches) + batch tracker
+    $globalIdx = 0; $batchNumber = 0
+    $pageSize = 1000
+
     do {
         # --- SOURCE read (PF service) ---
         try {
@@ -733,18 +736,26 @@ function Get-PublicFolderItems {
             $result.Status = 'SourceReadFailed'
             $result.Error  = $m + $hint
             Write-Error ("Items from source PF '{0}' could not be read: {1}{2}" -f $PublicFolderPath, $m, $hint)
-            Write-Progress -Activity ("Copying items to MBX [{0}]" -f $TargetMailboxSmtp) -Completed
+            Write-Progress -Activity ("Copying items to [{0}]" -f $targetFolderPath) -Completed
             return $result
         }
 
-        $itemTotal = $fi.Items.Count
-        $idx = 0
+        if ($fi.Items.Count -eq 0) { break }
+
+        $batchNumber++
+        $batchItemCount = $fi.Items.Count
 
         foreach ($item in $fi.Items) {
+            $globalIdx++
             $subject = if ($item.Subject) { $item.Subject } else { '#no subject#' }
-            $idx++
-            $percent = if ($itemTotal -gt 0) { [int](($idx / $itemTotal) * 100) } else { 100 }
-            Write-Progress -Activity ("{0}/{1} - Copying items to [{2}]" -f $idx,$itemTotal,$targetFolderPath) -Status $subject -PercentComplete $percent
+
+            # Progress: show "Item X (Batch Y)" and estimated % based on full offset
+            $estimatedTotal = $iv.Offset + $batchItemCount
+            $percent = if ($estimatedTotal -gt 0) { [int](($globalIdx / $estimatedTotal) * 100) } else { 0 }
+            Write-Progress `
+                -Activity ("Copying items to [{0}] - Batch {1}" -f $targetFolderPath, $batchNumber) `
+                -Status ("Item {0} of ~{1}" -f $globalIdx, $estimatedTotal) `
+                -PercentComplete $percent
 
             $uid = $item.Id.UniqueId
             if ($already -contains $uid) {
@@ -767,7 +778,7 @@ function Get-PublicFolderItems {
             }
         }
 
-        $iv.Offset += $fi.Items.Count
+        $iv.Offset += $batchItemCount
     } while ($fi.MoreAvailable -eq $true)
 
     Write-Progress -Activity ("Copying items to [{0}]" -f $targetFolderPath) -Completed
