@@ -27,9 +27,8 @@ This project provides two complementary scripts for public folder migration:
 ### Software
 - **PowerShell 5.1** or later (on Windows)
 - **EWS Managed API 2.2** (Microsoft.Exchange.WebServices.dll)
-  - Separate download – **not** installed with Exchange Server by default
-  - [Download (Microsoft)](https://www.microsoft.com/en-us/download/details.aspx?id=42951) and run the MSI on the machine running the script
-  - The installer registers the DLL path under `HKLM\SOFTWARE\Microsoft\Exchange\Web Services`, which the script reads automatically
+  - Separate component – **not** installed with Exchange Server by default
+  - The old Microsoft download (`details.aspx?id=42951`) has been **retired**; obtain the DLL via **NuGet** (see [Installing the EWS Managed API](#installing-the-ews-managed-api))
 - **Windows Integrated Authentication** with Exchange
 
 ### Permissions
@@ -48,14 +47,64 @@ This project provides two complementary scripts for public folder migration:
 ## Installation
 
 ```powershell
-git clone https://github.com/azitc-ac/PF2SharedMBXOnprem.git
-cd PF2SharedMBXOnprem
+git clone https://github.com/azitc-ac/PFMig-Onprem.git
+cd PFMig-Onprem
 ```
 
-Verify EWS Managed API:
+Then install the EWS Managed API (see below).
+
+## Installing the EWS Managed API
+
+The Microsoft download page for the EWS Managed API 2.2 MSI has been retired. The assembly is now distributed via **NuGet** (`Microsoft.Exchange.WebServices`, v2.2.0).
+
+The script's loader (`Load-EWSManagedAPI`) searches for `Microsoft.Exchange.WebServices.dll` in this order:
+1. Explicit path passed to the function (`-DllPath`)
+2. Environment variable `EWS_MANAGED_API_DLL`
+3. **Next to the scripts** (script folder)
+4. A **`lib`** subfolder next to the scripts
+5. Legacy MSI install (registry `HKLM\SOFTWARE\Microsoft\Exchange\Web Services`)
+
+So the simplest setup is: get the DLL via NuGet and drop it into the repo's `lib` folder.
+
+### Option A – `nuget.exe` (no admin rights needed)
 ```powershell
-Get-ItemProperty "Registry::HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Exchange\Web Services" |
-  Get-ChildItem | Sort-Object Name -Descending | Select-Object -First 1
+# Download nuget.exe if you don't have it: https://www.nuget.org/downloads
+.\nuget.exe install Microsoft.Exchange.WebServices -Version 2.2.0 -OutputDirectory .\packages
+
+# Copy the DLL into a lib folder next to the scripts
+New-Item -ItemType Directory -Force -Path .\lib | Out-Null
+Copy-Item .\packages\Microsoft.Exchange.WebServices.2.2.0\lib\40\Microsoft.Exchange.WebServices.dll .\lib\
+```
+
+### Option B – PowerShell `Install-Package` (PackageManagement)
+```powershell
+# Register the NuGet source once if needed:
+# Register-PackageSource -Name nuget.org -Location https://api.nuget.org/v3/index.json -ProviderName NuGet
+
+Install-Package Microsoft.Exchange.WebServices -RequiredVersion 2.2.0 -Source nuget.org -Scope CurrentUser -Force
+
+# Locate and copy the DLL into the lib folder
+$pkg = (Get-Package Microsoft.Exchange.WebServices).Source | Split-Path
+New-Item -ItemType Directory -Force -Path .\lib | Out-Null
+Copy-Item (Join-Path $pkg 'lib\40\Microsoft.Exchange.WebServices.dll') .\lib\
+```
+
+### Option C – point to an existing DLL
+If the DLL already exists somewhere on the machine (e.g. an old MSI install or another app):
+```powershell
+$env:EWS_MANAGED_API_DLL = 'C:\Path\To\Microsoft.Exchange.WebServices.dll'
+```
+
+> **Important – unblock the DLL.** A DLL downloaded from the internet (NuGet) is marked as blocked by Windows and .NET will refuse to load it. Clear the mark of the web:
+> ```powershell
+> Unblock-File .\lib\Microsoft.Exchange.WebServices.dll
+> ```
+
+### Verify it loads
+```powershell
+. .\PFmig-Functions.ps1
+Load-EWSManagedAPI -Verbose
+# -> "EWS Managed API loaded from: ...\lib\Microsoft.Exchange.WebServices.dll"
 ```
 
 ## Usage
@@ -148,8 +197,8 @@ New-ManagementRoleAssignment -Role ApplicationImpersonation -User "$env:USERDOMA
 Before running a full migration, verify that ApplicationImpersonation is functioning:
 
 ```powershell
-# Load EWS Managed API
-Add-Type -Path 'C:\Program Files\Microsoft\Exchange\Web Services\2.2\Microsoft.Exchange.WebServices.dll'
+# Load EWS Managed API (adjust path to where you placed the DLL, e.g. .\lib\)
+Add-Type -Path '.\lib\Microsoft.Exchange.WebServices.dll'
 
 # Connect to EWS with default credentials (Windows Integrated Auth)
 $service = New-Object Microsoft.Exchange.WebServices.Data.ExchangeService([Microsoft.Exchange.WebServices.Data.ExchangeVersion]::Exchange2013_SP1)

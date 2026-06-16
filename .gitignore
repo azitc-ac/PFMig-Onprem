@@ -1,0 +1,13 @@
+# EWS Managed API DLL (obtained via NuGet, not redistributed in this repo)
+lib/
+packages/
+nuget.exe
+*.dll
+
+# Generated migration artifacts
+PFMig_*.log
+PFMig_*_report.csv
+PFMig_*_oversized.csv
+PFMig_*_failed.csv
+PFMig.OU.config
+*.csv

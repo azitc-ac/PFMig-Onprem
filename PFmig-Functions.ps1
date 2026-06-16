@@ -10,7 +10,10 @@
 
 function Load-EWSManagedAPI {
     [CmdletBinding()]
-    param()
+    param(
+        # Optional explicit path to Microsoft.Exchange.WebServices.dll
+        [string]$DllPath
+    )
 
     # Check if EWS assembly is already loaded in current AppDomain (don't reload)
     $loaded = [AppDomain]::CurrentDomain.GetAssemblies() |
@@ -20,19 +23,40 @@ function Load-EWSManagedAPI {
         return
     }
 
-    # Otherwise: load highest version from Registry (as before)
+    # Build ordered list of candidate DLL locations.
+    # Preference order: explicit param > env var > script dir / lib subfolder
+    # (NuGet-style install) > legacy MSI registry path.
+    $candidates = New-Object System.Collections.Generic.List[string]
+    if ($DllPath)            { $candidates.Add($DllPath) }
+    if ($env:EWS_MANAGED_API_DLL) { $candidates.Add($env:EWS_MANAGED_API_DLL) }
+    $candidates.Add((Join-Path $PSScriptRoot 'Microsoft.Exchange.WebServices.dll'))
+    $candidates.Add((Join-Path $PSScriptRoot 'lib\Microsoft.Exchange.WebServices.dll'))
+
+    # Legacy: highest version from MSI registry entry (old web download)
     $key = 'Registry::HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Exchange\Web Services'
     $ewsKey = Get-ChildItem -Path $key -ErrorAction SilentlyContinue |
               Sort-Object Name -Descending | Select-Object -First 1 -ExpandProperty Name
     if ($ewsKey) {
         $installDir = (Get-ItemProperty -Path "Registry::$ewsKey" -ErrorAction SilentlyContinue).'Install Directory'
-        $dll = Join-Path $installDir 'Microsoft.Exchange.WebServices.dll'
-        if (Test-Path $dll) {
-            Import-Module $dll -ErrorAction Stop
+        if ($installDir) {
+            $candidates.Add((Join-Path $installDir 'Microsoft.Exchange.WebServices.dll'))
+        }
+    }
+
+    foreach ($dll in $candidates) {
+        if ($dll -and (Test-Path $dll)) {
+            # Add-Type -Path loads the assembly into the AppDomain (correct for a
+            # plain .NET assembly; Import-Module would treat it as a binary module)
+            Add-Type -Path $dll -ErrorAction Stop
+            Write-Verbose ("EWS Managed API loaded from: {0}" -f $dll)
             return
         }
     }
-    Write-Error "EWS Managed API (>=1.2) not found. Please install."
+
+    Write-Error ("EWS Managed API (Microsoft.Exchange.WebServices.dll) not found. " +
+        "Install it via NuGet (Install-Package Microsoft.Exchange.WebServices) and place the DLL " +
+        "next to the scripts or in a 'lib' subfolder, or set `$env:EWS_MANAGED_API_DLL to its full path. " +
+        "See README for details.")
     throw
 }
 
