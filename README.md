@@ -13,6 +13,7 @@ This project provides two complementary scripts for public folder migration:
 - ✅ Interactive public folder and OU selection (with caching)
 - ✅ Automatic shared mailbox creation with SMTP provisioning
 - ✅ Per-item error handling (one item failure doesn't abort migration)
+- ✅ Oversized/corrupt item filtering via `MaxItemSize` (skipped, not failed)
 - ✅ Incremental item copying via CSV deduplication log
 - ✅ Folder hierarchy and traversal permission management
 - ✅ Mail-enabled PF address migration and mailflow cutover
@@ -98,13 +99,36 @@ Disables mail-enabled PF and assigns addresses to target mailbox.
 | Url | string | https://COMPUTERNAME/EWS/Exchange.asmx | Explicit EWS endpoint (defaults to local server) |
 | AutodiscoverUrl | string | (auto-derive) | Explicit Autodiscover URL |
 | AdditionalAdminSam | string | (none) | Additional Owner |
+| MaxItemSize | long | 10MB | Items larger than this are skipped (logged as oversized) and do not abort the run |
+
+## Handling Oversized / Corrupt Items
+
+Large or corrupt items can cause EWS `Copy()` to fail with **"Fehler beim Verschiebungs- oder Kopiervorgang"** ("Error during the move or copy operation"). To prevent these from aborting the run, the script pre-checks each item's size:
+
+- Items larger than `-MaxItemSize` (default **10 MB**) are **skipped** and counted as *oversized* (not as failures).
+- Skipped items are recorded in the dedup log with status `Oversized`, so subsequent runs don't re-attempt them.
+- Items that still fail to copy (e.g. genuinely corrupt) are logged with status `Failed` and listed in `PFMig_<timestamp>_failed.csv` for review.
+
+**Raise or lower the threshold** as needed:
+```powershell
+# Allow items up to 20 MB
+.\Migrate-PublicFolders.ps1 -PublicFolderPath '\Wartungskalender' -MaxItemSize 20MB
+```
+
+After the run, review which items were skipped:
+```powershell
+Import-Csv .\PFMig_<timestamp>_oversized.csv | Format-Table Subject, Size
+Import-Csv .\PFMig_<timestamp>_failed.csv   | Format-Table Subject, ErrorMessage
+```
 
 ## Output
 
-- **Console:** Concise status with per-folder item counts
+- **Console:** Concise status with per-folder item counts (copied / skipped / oversized / failed)
 - **Transcript:** `PFMig_<timestamp>.log` – full details
 - **Report:** `PFMig_<timestamp>_report.csv` – status per folder
-- **Dedup Log:** `<mailbox-smtp>.csv` – prevents re-copying items
+- **Oversized Report:** `PFMig_<timestamp>_oversized.csv` – items skipped for exceeding `MaxItemSize`
+- **Failed Report:** `PFMig_<timestamp>_failed.csv` – items that could not be copied, with error message
+- **Dedup Log:** `<mailbox-smtp>.csv` – prevents re-copying items (incl. oversized/failed)
 
 ## Troubleshooting
 
@@ -161,6 +185,14 @@ If this fails with `401 Unauthorized`, the RBAC role assignment hasn't propagate
 2. Verify source folder not empty: `Get-PublicFolder <path> -ResultSize Unlimited | Get-PublicFolderItem`
 3. Check dedup log: `<target-mailbox-smtp>.csv`
 
+### "Fehler beim Verschiebungs- oder Kopiervorgang" (Error during move/copy)
+Usually caused by items that are too large or corrupt for EWS `Copy()`.
+- The script skips items above `-MaxItemSize` (default 10 MB) automatically – see [Handling Oversized / Corrupt Items](#handling-oversized--corrupt-items).
+- If many items still fail, lower the threshold or inspect `PFMig_<timestamp>_failed.csv`.
+  ```powershell
+  .\Migrate-PublicFolders.ps1 -PublicFolderPath '\YourFolder' -MaxItemSize 5MB
+  ```
+
 ## Architecture
 
 **Two separate scripts:**
@@ -195,4 +227,4 @@ If this fails with `401 Unauthorized`, the RBAC role assignment hasn't propagate
 ---
 
 **Version:** 2.0 (Refactored, English, Production-Ready)  
-**Updated:** 2026-06-11
+**Updated:** 2026-06-16
