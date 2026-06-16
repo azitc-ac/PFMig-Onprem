@@ -95,7 +95,7 @@ Disables mail-enabled PF and assigns addresses to target mailbox.
 | CopyOnly | switch | false | Skip permissions |
 | CutoverMailflow | switch | false | Disable PF, assign addresses |
 | PermissionMode | string | FullMailbox | FullMailbox or FolderACL |
-| Url | string | (Autodiscover) | Explicit EWS endpoint |
+| Url | string | https://COMPUTERNAME/EWS/Exchange.asmx | Explicit EWS endpoint (defaults to local server) |
 | AutodiscoverUrl | string | (auto-derive) | Explicit Autodiscover URL |
 | AdditionalAdminSam | string | (none) | Additional Owner |
 
@@ -118,6 +118,34 @@ Disables mail-enabled PF and assigns addresses to target mailbox.
 New-ManagementRoleAssignment -Role ApplicationImpersonation -User "$env:USERDOMAIN\$env:USERNAME"
 # Wait ~15 minutes
 ```
+
+### Quick Check: Verify ApplicationImpersonation Works
+Before running a full migration, verify that ApplicationImpersonation is functioning:
+
+```powershell
+# Load EWS Managed API
+Add-Type -Path 'C:\Program Files\Microsoft\Exchange\Web Services\2.2\Microsoft.Exchange.WebServices.dll'
+
+# Connect to EWS with default credentials (Windows Integrated Auth)
+$service = New-Object Microsoft.Exchange.WebServices.Data.ExchangeService([Microsoft.Exchange.WebServices.Data.ExchangeVersion]::Exchange2013_SP1)
+$service.UseDefaultCredentials = $true
+$service.Url = [System.Uri]'https://localhost/EWS/Exchange.asmx'
+
+# Test impersonation: try to access target mailbox folder
+try {
+    $rootId = New-Object Microsoft.Exchange.WebServices.Data.FolderId(
+        [Microsoft.Exchange.WebServices.Data.WellKnownFolderName]::MsgFolderRoot, 
+        'target-mailbox@domain.com'  # Replace with target mailbox SMTP
+    )
+    [void][Microsoft.Exchange.WebServices.Data.Folder]::Bind($service, $rootId)
+    Write-Host "✅ ApplicationImpersonation is working!" -ForegroundColor Green
+} catch {
+    Write-Host "❌ ApplicationImpersonation failed: $($_.Exception.Message)" -ForegroundColor Red
+    exit 1
+}
+```
+
+If this fails with `401 Unauthorized`, the RBAC role assignment hasn't propagated yet or the user doesn't have the role. Wait 15 minutes and retry.
 
 ### Mailbox Store temporarily unavailable
 - Wait 2–5 minutes

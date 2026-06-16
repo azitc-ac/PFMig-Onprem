@@ -178,12 +178,11 @@ if (-not $PublicFolderPath) {
     Write-Host ("Source : {0}" -f $PublicFolderPath)
     Write-Host ("Target : {0}  ({1})" -f $TargetMailboxName, $targetSmtp)
 
-    # For Hybrid setups: prefer local EWS endpoint over Autodiscover
+    # For Hybrid setups: use explicit local EWS endpoint by default
     # (Autodiscover may route to cloud, breaking on-prem ApplicationImpersonation)
-    if (-not $Url) {
-        $localServerName = $env:COMPUTERNAME
-        $Url = "https://$localServerName/EWS/Exchange.asmx"
-        Write-Verbose ("Hybrid setup detected: using local EWS endpoint [{0}]" -f $Url)
+    if ([string]::IsNullOrWhiteSpace($Url)) {
+        $Url = "https://$env:COMPUTERNAME/EWS/Exchange.asmx"
+        Write-Verbose ("Using default local EWS endpoint: {0}" -f $Url)
     }
 
     # Two separate EWS instances
