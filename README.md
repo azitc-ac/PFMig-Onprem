@@ -27,8 +27,9 @@ This project provides two complementary scripts for public folder migration:
 ### Software
 - **PowerShell 5.1** or later (on Windows)
 - **EWS Managed API 2.2** (Microsoft.Exchange.WebServices.dll)
-  - [Download](https://www.microsoft.com/en-us/download/details.aspx?id=42951)
-  - Or obtain via Exchange on-premises installation
+  - Separate download – **not** installed with Exchange Server by default
+  - [Download (Microsoft)](https://www.microsoft.com/en-us/download/details.aspx?id=42951) and run the MSI on the machine running the script
+  - The installer registers the DLL path under `HKLM\SOFTWARE\Microsoft\Exchange\Web Services`, which the script reads automatically
 - **Windows Integrated Authentication** with Exchange
 
 ### Permissions
