@@ -710,17 +710,11 @@ function Get-PublicFolderItems {
         return $result
     }
 
-    # Pre-load item sizes to filter oversized items
+    # Pre-load item sizes to filter oversized items (fallback if available)
+    # Note: Get-PublicFolderItemStatistics uses EntryId which may not match EWS item.Id
+    # so we use it only as a hint; Bind is more reliable for size checking
     Write-Verbose ("Pre-checking item sizes (MaxItemSize: {0} bytes)" -f $MaxItemSize)
     $itemSizes = @{}
-    try {
-        $sizeStats = Get-PublicFolderItemStatistics -Identity $PublicFolderPath -ErrorAction SilentlyContinue
-        foreach ($stat in $sizeStats) {
-            $itemSizes[$stat.EntryId] = $stat.MessageSize
-        }
-    } catch {
-        Write-Verbose ("Could not pre-load item sizes: {0}" -f $_.Exception.Message)
-    }
 
     # Paging
     $iv = New-Object Microsoft.Exchange.WebServices.Data.ItemView(1000)
@@ -777,18 +771,29 @@ function Get-PublicFolderItems {
             if ($already -contains $uid) {
                 $result.ItemsSkipped++
             } else {
-                # Pre-check for oversized items
+                # Pre-check for oversized items: try pre-loaded stats first (fastest),
+                # fallback to Bind if unavailable
                 $isOversized = $false
-                try {
-                    # Try to get item size via Bind with minimal property set
-                    $ps = New-Object Microsoft.Exchange.WebServices.Data.PropertySet([Microsoft.Exchange.WebServices.Data.BasePropertySet]::IdOnly)
-                    $boundItem = [Microsoft.Exchange.WebServices.Data.Item]::Bind($Service, $item.Id, $ps)
-                    $itemSize = $boundItem.Size
-                    if ($itemSize -gt $MaxItemSize) {
-                        $isOversized = $true
+                $itemSize = 0
+
+                # First: use pre-loaded statistics (via Get-PublicFolderItemStatistics)
+                if ($itemSizes.ContainsKey($item.Id.UniqueId)) {
+                    $itemSize = $itemSizes[$item.Id.UniqueId]
+                } else {
+                    # Fallback: Bind with FirstClassProperties to get Size
+                    try {
+                        $ps = New-Object Microsoft.Exchange.WebServices.Data.PropertySet([Microsoft.Exchange.WebServices.Data.BasePropertySet]::FirstClassProperties)
+                        $boundItem = [Microsoft.Exchange.WebServices.Data.Item]::Bind($Service, $item.Id, $ps)
+                        if ($boundItem.Size) {
+                            $itemSize = $boundItem.Size
+                        }
+                    } catch {
+                        Write-Verbose ("Could not determine size for item '{0}': {1}" -f $subject, $_.Exception.Message)
                     }
-                } catch {
-                    # Can't determine size; try to copy anyway
+                }
+
+                if ($itemSize -gt $MaxItemSize) {
+                    $isOversized = $true
                 }
 
                 if ($isOversized) {
